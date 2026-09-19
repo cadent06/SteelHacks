@@ -280,10 +280,24 @@ def plot_results(
     plt.close(figure)
 
 
-def print_report(report: RiskReport, horizon: int, simulations: int, confidence: float, output_path: str) -> None:
+def print_report(
+    report: RiskReport,
+    horizon: int,
+    simulations: int,
+    confidence: float,
+    output_path: str,
+    portfolio: dict[str, float] | None = None,
+    asset_output_path: str | None = None,
+) -> None:
     print("\nCLASSICAL MONTE CARLO RISK REPORT")
     print("=" * 38)
-    print(f"Asset                 {report.ticker}")
+    if portfolio:
+        print("Portfolio holdings")
+        print("------------------")
+        for ticker, weight in portfolio.items():
+            print(f"{ticker:<22}{weight:>7.2%}")
+    else:
+        print(f"Asset                 {report.ticker}")
     print(f"Horizon               {horizon} trading days")
     print(f"Simulations           {simulations:,}")
     print(f"Starting price        ${report.spot_price:,.2f}")
@@ -293,7 +307,10 @@ def print_report(report: RiskReport, horizon: int, simulations: int, confidence:
     print(f"VaR ({confidence:.0%})            {report.var_95:.2%}")
     print(f"CVaR ({confidence:.0%})           {report.cvar_95:.2%}")
     print(f"Simulated range       {report.worst_case:+.2%} to {report.best_case:+.2%}")
-    print(f"Chart saved to        {Path(output_path).resolve()}\n")
+    print(f"Portfolio chart       {Path(output_path).resolve()}")
+    if asset_output_path:
+        print(f"Asset charts          {Path(asset_output_path).resolve()}")
+    print()
 
 
 def main() -> None:
@@ -308,21 +325,31 @@ def main() -> None:
             prices, weights, args.horizon, args.simulations, args.seed
         )
         label = "Portfolio (" + ", ".join(portfolio) + ")"
+        asset_output_path = "portfolio_assets_risk.png"
         plot_asset_results(
             list(prices.columns),
             prices,
             asset_paths,
-            "portfolio_assets_risk.png",
+            asset_output_path,
         )
     else:
         prices = download_prices(args.ticker, args.lookback)
         log_returns = np.log(prices / prices.shift(1)).dropna()
         paths = simulate_paths(prices.iloc[-1], log_returns, args.horizon, args.simulations, args.seed)
         label = args.ticker
+        asset_output_path = None
 
     report = build_report(label, paths, log_returns, args.confidence)
     plot_results(label, paths, report, args.output)
-    print_report(report, args.horizon, args.simulations, args.confidence, args.output)
+    print_report(
+        report,
+        args.horizon,
+        args.simulations,
+        args.confidence,
+        args.output,
+        portfolio if args.portfolio else None,
+        asset_output_path,
+    )
 
 
 if __name__ == "__main__":

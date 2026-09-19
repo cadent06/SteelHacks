@@ -48,6 +48,13 @@ python monteCarloRisk.py \
 	--simulations 20000
 ```
 
+The terminal report lists every ticker and its allocation, followed by portfolio-level volatility, probability of loss, VaR, and CVaR. The two chart files are:
+
+- `monte_carlo_risk.png`: combined portfolio paths and terminal-value distribution
+- `portfolio_assets_risk.png`: simulated paths for each individual holding
+
+Weights are decimal portfolio allocations and must add up to `1.0`. For example, `SPY:0.30` means 30% of the modeled portfolio. The current model normalizes the portfolio value from these weights; it does not connect to brokerage credentials or read private account data.
+
 The horizon is measured in trading days: `21` is about one month, `63` is about one quarter, and `252` is about one trading year.
 
 ## Tools and interests
