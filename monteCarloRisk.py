@@ -1,7 +1,5 @@
 """Monte Carlo market-risk analysis using Yahoo Finance price history.
-
-Example:
-    python riskAnalysisModelPrototype.python --ticker SPY --horizon 252 --simulations 20000
+ --ticker SPY --horizon 252 --simulations 20000
 """
 
 from __future__ import annotations
@@ -37,6 +35,10 @@ class RiskReport:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Classical Monte Carlo risk analysis")
     parser.add_argument("--ticker", default="SPY", help="Yahoo Finance symbol, e.g. SPY or AAPL")
+    parser.add_argument(
+        "--portfolio",
+        help="Portfolio weights formatted as TICKER:WEIGHT,..., e.g. SPY:0.6,AAPL:0.4",
+    )
     parser.add_argument("--lookback", type=int, default=5, help="Years of historical prices")
     parser.add_argument("--horizon", type=int, default=252, help="Trading days to simulate")
     parser.add_argument("--simulations", type=int, default=20_000, help="Number of Monte Carlo paths")
@@ -44,6 +46,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducible results")
     parser.add_argument("--output", default="monte_carlo_risk.png", help="Output chart filename")
     return parser.parse_args()
+
+
+def parse_portfolio(value: str) -> dict[str, float]:
+    portfolio: dict[str, float] = {}
+    for position in value.split(","):
+        try:
+            ticker, weight = position.split(":")
+            portfolio[ticker.strip().upper()] = float(weight)
+        except ValueError as error:
+            raise ValueError(f"Invalid portfolio position '{position}'. Use TICKER:WEIGHT.") from error
+
+    if not portfolio or any(weight < 0 for weight in portfolio.values()):
+        raise ValueError("Portfolio weights must be non-negative.")
+    total_weight = sum(portfolio.values())
+    if not np.isclose(total_weight, 1.0):
+        raise ValueError(f"Portfolio weights must sum to 1.0; received {total_weight:.4f}.")
+    return portfolio
 
 
 def download_prices(ticker: str, lookback_years: int) -> pd.Series:
@@ -72,6 +91,14 @@ def download_prices(ticker: str, lookback_years: int) -> pd.Series:
     return close
 
 
+def download_portfolio_prices(tickers: list[str], lookback_years: int) -> pd.DataFrame:
+    histories = {ticker: download_prices(ticker, lookback_years) for ticker in tickers}
+    prices = pd.concat(histories, axis=1).dropna()
+    if len(prices) < 60:
+        raise ValueError("The portfolio has fewer than 60 shared trading days of history.")
+    return prices
+
+
 def simulate_paths(
     spot_price: float,
     log_returns: pd.Series,
@@ -95,6 +122,35 @@ def simulate_paths(
     starting_row = np.full((1, simulations), spot_price)
     price_paths = spot_price * growth_factors
     return np.vstack([starting_row, price_paths])
+
+
+def simulate_portfolio_paths(
+    prices: pd.DataFrame,
+    weights: np.ndarray,
+    horizon: int,
+    simulations: int,
+    seed: int,
+) -> tuple[np.ndarray, pd.Series]:
+    if horizon < 1 or simulations < 1:
+        raise ValueError("horizon and simulations must be positive")
+
+    log_returns = np.log(prices / prices.shift(1)).dropna()
+    daily_drift = log_returns.mean().to_numpy()
+    covariance = log_returns.cov().to_numpy()
+    portfolio_start = float(np.dot(prices.iloc[-1].to_numpy(), weights))
+    rng = np.random.default_rng(seed)
+    shocks = rng.multivariate_normal(
+        mean=np.zeros(len(weights)),
+        cov=covariance,
+        size=(horizon, simulations),
+    )
+    daily_returns = daily_drift + shocks
+    asset_growth = np.exp(np.cumsum(daily_returns, axis=0))
+    portfolio_growth = np.einsum("dsa,a->ds", asset_growth, weights)
+    starting_row = np.full((1, simulations), portfolio_start)
+    portfolio_paths = portfolio_start * portfolio_growth
+    simulated_log_returns = pd.Series(np.log(prices / prices.shift(1)).dot(weights))
+    return np.vstack([starting_row, portfolio_paths]), simulated_log_returns
 
 def build_report(
     ticker: str,
@@ -195,11 +251,22 @@ def main() -> None:
     args = parse_args()
     if not 0.5 < args.confidence < 1:
         raise ValueError("confidence must be between 0.5 and 1")
-    prices = download_prices(args.ticker, args.lookback)
-    log_returns = np.log(prices / prices.shift(1)).dropna()
-    paths = simulate_paths(prices.iloc[-1], log_returns, args.horizon, args.simulations, args.seed)
-    report = build_report(args.ticker, paths, log_returns, args.confidence)
-    plot_results(args.ticker, paths, report, args.output)
+    if args.portfolio:
+        portfolio = parse_portfolio(args.portfolio)
+        prices = download_portfolio_prices(list(portfolio), args.lookback)
+        weights = np.array([portfolio[ticker] for ticker in prices.columns])
+        paths, log_returns = simulate_portfolio_paths(
+            prices, weights, args.horizon, args.simulations, args.seed
+        )
+        label = "Portfolio (" + ", ".join(portfolio) + ")"
+    else:
+        prices = download_prices(args.ticker, args.lookback)
+        log_returns = np.log(prices / prices.shift(1)).dropna()
+        paths = simulate_paths(prices.iloc[-1], log_returns, args.horizon, args.simulations, args.seed)
+        label = args.ticker
+
+    report = build_report(label, paths, log_returns, args.confidence)
+    plot_results(label, paths, report, args.output)
     print_report(report, args.horizon, args.simulations, args.confidence, args.output)
 
 

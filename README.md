@@ -24,6 +24,23 @@ A Python-based market-risk simulator that uses historical Yahoo Finance data and
 - Conditional Value at Risk (CVaR)
 - Confidence-band visualizations
 
+Run a one-year, 20,000-path single-asset simulation with:
+
+```bash
+python monteCarloRisk.py --ticker SPY --horizon 252 --simulations 20000
+```
+
+To model a portfolio, provide decimal weights that add up to `1.0`:
+
+```bash
+python monteCarloRisk.py \
+	--portfolio SPY:0.60,AAPL:0.25,MSFT:0.15 \
+	--horizon 252 \
+	--simulations 20000
+```
+
+Portfolio mode estimates historical correlations between holdings and applies correlated Monte Carlo shocks. The horizon is measured in trading days: `21` is about one month, `63` is about one quarter, and `252` is about one trading year.
+
 ## Tools and interests
 
 **Technical:** Python, NumPy, pandas, Matplotlib, yfinance, quantitative analysis
