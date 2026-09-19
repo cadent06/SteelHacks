@@ -16,6 +16,7 @@ import yfinance as yf
 
 
 TRADING_DAYS = 252
+DEFAULT_PORTFOLIO = "SPY:0.30,AAPL:0.20,MSFT:0.20,GOOGL:0.15,AMZN:0.15"
 
 
 @dataclass(frozen=True)
@@ -34,7 +35,7 @@ class RiskReport:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Classical Monte Carlo risk analysis")
-    parser.add_argument("--ticker", default="SPY", help="Yahoo Finance symbol, e.g. SPY or AAPL")
+    parser.add_argument("--ticker", help="Run single-stock analysis, e.g. SPY or AAPL")
     parser.add_argument(
         "--portfolio",
         help="Portfolio weights formatted as TICKER:WEIGHT,..., e.g. SPY:0.6,AAPL:0.4",
@@ -317,8 +318,18 @@ def main() -> None:
     args = parse_args()
     if not 0.5 < args.confidence < 1:
         raise ValueError("confidence must be between 0.5 and 1")
-    if args.portfolio:
-        portfolio = parse_portfolio(args.portfolio)
+    if args.ticker and args.portfolio:
+        raise ValueError("Use either --ticker for one stock or --portfolio for multiple stocks, not both.")
+
+    if args.ticker:
+        prices = download_prices(args.ticker, args.lookback)
+        log_returns = np.log(prices / prices.shift(1)).dropna()
+        paths = simulate_paths(prices.iloc[-1], log_returns, args.horizon, args.simulations, args.seed)
+        label = args.ticker
+        portfolio = None
+        asset_output_path = None
+    else:
+        portfolio = parse_portfolio(args.portfolio or DEFAULT_PORTFOLIO)
         prices = download_portfolio_prices(list(portfolio), args.lookback)
         weights = np.array([portfolio[ticker] for ticker in prices.columns])
         paths, asset_paths, log_returns = simulate_portfolio_paths(
@@ -332,13 +343,6 @@ def main() -> None:
             asset_paths,
             asset_output_path,
         )
-    else:
-        prices = download_prices(args.ticker, args.lookback)
-        log_returns = np.log(prices / prices.shift(1)).dropna()
-        paths = simulate_paths(prices.iloc[-1], log_returns, args.horizon, args.simulations, args.seed)
-        label = args.ticker
-        asset_output_path = None
-
     report = build_report(label, paths, log_returns, args.confidence)
     plot_results(label, paths, report, args.output)
     print_report(
@@ -347,7 +351,7 @@ def main() -> None:
         args.simulations,
         args.confidence,
         args.output,
-        portfolio if args.portfolio else None,
+        portfolio,
         asset_output_path,
     )
 

@@ -24,11 +24,19 @@ A Python-based market-risk simulator that uses historical Yahoo Finance data and
 - Conditional Value at Risk (CVaR)
 - Confidence-band visualizations
 
-Run a one-year, 20,000-path single-asset simulation with:
+By default, the script runs the five-stock example portfolio: SPY, AAPL, MSFT, GOOGL, and AMZN. Run it with:
+
+```bash
+python monteCarloRisk.py
+```
+
+For a one-year, 20,000-path single-asset simulation, pass `--ticker`:
 
 ```bash
 python monteCarloRisk.py --ticker SPY --horizon 252 --simulations 20000
 ```
+
+Do not combine `--ticker` and `--portfolio`; `--ticker` is the single-stock mode and `--portfolio` is the multi-stock mode.
 
 To model a portfolio, provide decimal weights that add up to `1.0`:
 
