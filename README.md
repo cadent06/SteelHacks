@@ -39,7 +39,16 @@ python monteCarloRisk.py \
 	--simulations 20000
 ```
 
-Portfolio mode estimates historical correlations between holdings and applies correlated Monte Carlo shocks. The horizon is measured in trading days: `21` is about one month, `63` is about one quarter, and `252` is about one trading year.
+Portfolio mode supports up to five stocks, estimates historical correlations between holdings, and applies correlated Monte Carlo shocks. It saves both the combined portfolio chart and a five-panel `portfolio_assets_risk.png` chart for the individual holdings:
+
+```bash
+python monteCarloRisk.py \
+	--portfolio SPY:0.30,AAPL:0.20,MSFT:0.20,GOOGL:0.15,AMZN:0.15 \
+	--horizon 252 \
+	--simulations 20000
+```
+
+The horizon is measured in trading days: `21` is about one month, `63` is about one quarter, and `252` is about one trading year.
 
 ## Tools and interests
 

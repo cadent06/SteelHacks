@@ -59,6 +59,8 @@ def parse_portfolio(value: str) -> dict[str, float]:
 
     if not portfolio or any(weight < 0 for weight in portfolio.values()):
         raise ValueError("Portfolio weights must be non-negative.")
+    if len(portfolio) > 5:
+        raise ValueError("Portfolio mode supports up to 5 stocks for the individual asset chart.")
     total_weight = sum(portfolio.values())
     if not np.isclose(total_weight, 1.0):
         raise ValueError(f"Portfolio weights must sum to 1.0; received {total_weight:.4f}.")
@@ -130,7 +132,7 @@ def simulate_portfolio_paths(
     horizon: int,
     simulations: int,
     seed: int,
-) -> tuple[np.ndarray, pd.Series]:
+) -> tuple[np.ndarray, np.ndarray, pd.Series]:
     if horizon < 1 or simulations < 1:
         raise ValueError("horizon and simulations must be positive")
 
@@ -149,8 +151,55 @@ def simulate_portfolio_paths(
     portfolio_growth = np.einsum("dsa,a->ds", asset_growth, weights)
     starting_row = np.full((1, simulations), portfolio_start)
     portfolio_paths = portfolio_start * portfolio_growth
+    asset_paths = np.concatenate(
+        [np.ones((1, simulations, len(weights))), asset_growth], axis=0
+    )
     simulated_log_returns = pd.Series(np.log(prices / prices.shift(1)).dot(weights))
-    return np.vstack([starting_row, portfolio_paths]), simulated_log_returns
+    return np.vstack([starting_row, portfolio_paths]), asset_paths, simulated_log_returns
+
+
+def plot_asset_results(
+    tickers: list[str],
+    prices: pd.DataFrame,
+    asset_paths: np.ndarray,
+    output_path: str,
+) -> None:
+    chart_count = len(tickers)
+    rows = int(np.ceil(chart_count / 2))
+    figure, axes = plt.subplots(rows, 2, figsize=(14, 4.2 * rows), squeeze=False)
+    figure.patch.set_facecolor("#f7f4ee")
+    axes_flat = axes.ravel()
+    days = np.arange(asset_paths.shape[0])
+
+    for index, ticker in enumerate(tickers):
+        axis = axes_flat[index]
+        asset_paths_scaled = asset_paths[:, :, index] * float(prices.iloc[-1, index])
+        percentiles = np.percentile(asset_paths_scaled, [5, 50, 95], axis=1)
+        sample_count = min(100, asset_paths.shape[1])
+        axis.set_facecolor("#f7f4ee")
+        axis.plot(days, asset_paths_scaled[:, :sample_count], color="#8aa6a3", alpha=0.10, linewidth=0.7)
+        axis.fill_between(days, percentiles[0], percentiles[2], color="#2f6f73", alpha=0.16)
+        axis.plot(days, percentiles[1], color="#c85c3d", linewidth=2, label="Median path")
+        axis.axhline(prices.iloc[-1, index], color="#263238", linestyle="--", linewidth=1, label="Starting price")
+        axis.set_title(f"{ticker} simulated paths", loc="left", weight="bold")
+        axis.set_xlabel("Trading days")
+        axis.set_ylabel("Price ($)")
+        axis.legend(frameon=False, loc="upper left")
+
+    for axis in axes_flat[chart_count:]:
+        axis.set_visible(False)
+
+    figure.suptitle(
+        "INDIVIDUAL ASSET SIMULATIONS  |  CORRELATED PORTFOLIO MODEL",
+        x=0.06,
+        ha="left",
+        fontsize=15,
+        weight="bold",
+        color="#263238",
+    )
+    figure.tight_layout(rect=(0, 0, 1, 0.95))
+    figure.savefig(output_path, dpi=180, bbox_inches="tight", facecolor=figure.get_facecolor())
+    plt.close(figure)
 
 def build_report(
     ticker: str,
@@ -255,10 +304,16 @@ def main() -> None:
         portfolio = parse_portfolio(args.portfolio)
         prices = download_portfolio_prices(list(portfolio), args.lookback)
         weights = np.array([portfolio[ticker] for ticker in prices.columns])
-        paths, log_returns = simulate_portfolio_paths(
+        paths, asset_paths, log_returns = simulate_portfolio_paths(
             prices, weights, args.horizon, args.simulations, args.seed
         )
         label = "Portfolio (" + ", ".join(portfolio) + ")"
+        plot_asset_results(
+            list(prices.columns),
+            prices,
+            asset_paths,
+            "portfolio_assets_risk.png",
+        )
     else:
         prices = download_prices(args.ticker, args.lookback)
         log_returns = np.log(prices / prices.shift(1)).dropna()
