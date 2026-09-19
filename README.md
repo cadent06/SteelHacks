@@ -56,14 +56,28 @@ python monteCarloRisk.py \
 	--simulations 20000
 ```
 
+The portfolio starts at `$100,000` by default. Weights are converted into share quantities using each stock's latest price, so the simulated portfolio value and risk metrics are in dollars. Change the notional with `--portfolio-value 250000`.
+
 The terminal report lists every ticker and its allocation, followed by portfolio-level volatility, probability of loss, VaR, and CVaR. The two chart files are:
 
 - `monte_carlo_risk.png`: combined portfolio paths and terminal-value distribution
 - `portfolio_assets_risk.png`: simulated paths for each individual holding
 
-Weights are decimal portfolio allocations and must add up to `1.0`. For example, `SPY:0.30` means 30% of the modeled portfolio. The current model normalizes the portfolio value from these weights; it does not connect to brokerage credentials or read private account data.
+Weights are decimal portfolio allocations and must add up to `1.0`. For example, `SPY:0.30` means 30% of the modeled portfolio. The model does not connect to brokerage credentials or read private account data.
 
 The horizon is measured in trading days: `21` is about one month, `63` is about one quarter, and `252` is about one trading year.
+
+## Backtesting roadmap
+
+To backtest the model, use a walk-forward process rather than fitting on the entire history:
+
+1. Choose a historical training window, such as the prior 5 years.
+2. Estimate each holding's drift, volatility, and covariance using only that window.
+3. Simulate the next forecast horizon, such as 21 trading days.
+4. Compare the simulated return distribution with the actual realized portfolio return.
+5. Move the window forward and repeat across history.
+
+The key diagnostics are VaR breach rate, expected shortfall accuracy, average forecast error, and whether the realized losses fall inside the simulated confidence bands. A 95% VaR model should be breached roughly 5% of the time over many independent test periods, acknowledging that market regimes change.
 
 ## Tools and interests
 

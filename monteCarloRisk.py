@@ -43,6 +43,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lookback", type=int, default=5, help="Years of historical prices")
     parser.add_argument("--horizon", type=int, default=252, help="Trading days to simulate")
     parser.add_argument("--simulations", type=int, default=20_000, help="Number of Monte Carlo paths")
+    parser.add_argument("--portfolio-value", type=float, default=100_000, help="Starting portfolio value in dollars")
     parser.add_argument("--confidence", type=float, default=0.95, help="Confidence level for VaR/CVaR")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducible results")
     parser.add_argument("--output", default="monte_carlo_risk.png", help="Output chart filename")
@@ -130,17 +131,21 @@ def simulate_paths(
 def simulate_portfolio_paths(
     prices: pd.DataFrame,
     weights: np.ndarray,
+    portfolio_value: float,
     horizon: int,
     simulations: int,
     seed: int,
 ) -> tuple[np.ndarray, np.ndarray, pd.Series]:
     if horizon < 1 or simulations < 1:
         raise ValueError("horizon and simulations must be positive")
+    if portfolio_value <= 0:
+        raise ValueError("portfolio-value must be positive")
 
     log_returns = np.log(prices / prices.shift(1)).dropna()
     daily_drift = log_returns.mean().to_numpy()
     covariance = log_returns.cov().to_numpy()
-    portfolio_start = float(np.dot(prices.iloc[-1].to_numpy(), weights))
+    latest_prices = prices.iloc[-1].to_numpy()
+    shares = portfolio_value * weights / latest_prices
     rng = np.random.default_rng(seed)
     shocks = rng.multivariate_normal(
         mean=np.zeros(len(weights)),
@@ -149,11 +154,12 @@ def simulate_portfolio_paths(
     )
     daily_returns = daily_drift + shocks
     asset_growth = np.exp(np.cumsum(daily_returns, axis=0))
-    portfolio_growth = np.einsum("dsa,a->ds", asset_growth, weights)
-    starting_row = np.full((1, simulations), portfolio_start)
-    portfolio_paths = portfolio_start * portfolio_growth
+    asset_prices = asset_growth * latest_prices
+    starting_row = np.full((1, simulations), portfolio_value)
+    portfolio_paths = np.einsum("dsa,a->ds", asset_prices, shares)
+    starting_asset_prices = np.broadcast_to(latest_prices, (1, simulations, len(weights)))
     asset_paths = np.concatenate(
-        [np.ones((1, simulations, len(weights))), asset_growth], axis=0
+        [starting_asset_prices, asset_prices], axis=0
     )
     simulated_log_returns = pd.Series(np.log(prices / prices.shift(1)).dot(weights))
     return np.vstack([starting_row, portfolio_paths]), asset_paths, simulated_log_returns
@@ -174,7 +180,7 @@ def plot_asset_results(
 
     for index, ticker in enumerate(tickers):
         axis = axes_flat[index]
-        asset_paths_scaled = asset_paths[:, :, index] * float(prices.iloc[-1, index])
+        asset_paths_scaled = asset_paths[:, :, index]
         percentiles = np.percentile(asset_paths_scaled, [5, 50, 95], axis=1)
         sample_count = min(100, asset_paths.shape[1])
         axis.set_facecolor("#f7f4ee")
@@ -301,7 +307,8 @@ def print_report(
         print(f"Asset                 {report.ticker}")
     print(f"Horizon               {horizon} trading days")
     print(f"Simulations           {simulations:,}")
-    print(f"Starting price        ${report.spot_price:,.2f}")
+    starting_label = "Starting value" if portfolio else "Starting price"
+    print(f"{starting_label:<22}${report.spot_price:,.2f}")
     print(f"Annualized volatility {report.volatility:.2%}")
     print(f"Expected terminal     ${report.expected_price:,.2f} ({report.expected_return:+.2%})")
     print(f"Probability of loss   {report.probability_of_loss:.2%}")
@@ -333,7 +340,7 @@ def main() -> None:
         prices = download_portfolio_prices(list(portfolio), args.lookback)
         weights = np.array([portfolio[ticker] for ticker in prices.columns])
         paths, asset_paths, log_returns = simulate_portfolio_paths(
-            prices, weights, args.horizon, args.simulations, args.seed
+            prices, weights, args.portfolio_value, args.horizon, args.simulations, args.seed
         )
         label = "Portfolio (" + ", ".join(portfolio) + ")"
         asset_output_path = "portfolio_assets_risk.png"
