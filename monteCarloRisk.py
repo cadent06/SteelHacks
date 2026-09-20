@@ -1,5 +1,10 @@
 """Monte Carlo market-risk analysis using Yahoo Finance price history.
- --ticker SPY --horizon 252 --simulations 20000
+
+Run the CLI with ``python monteCarloRisk.py`` for the default portfolio, or
+use ``--ticker TICKER`` for single-asset mode. Portfolio weights are decimal
+fractions that must sum to 1.0. ``--horizon`` is measured in trading days,
+``--simulations`` controls the number of paths, and ``--portfolio-value``
+controls the starting portfolio notional.
 """
 
 from __future__ import annotations
@@ -33,6 +38,16 @@ class RiskReport:
     best_case: float
 
 
+@dataclass(frozen=True)
+class BacktestReport:
+    observations: int
+    breaches: int
+    breach_rate: float
+    expected_breach_rate: float
+    average_breach_return: float
+    worst_return: float
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Classical Monte Carlo risk analysis")
     parser.add_argument("--ticker", help="Run single-stock analysis, e.g. SPY or AAPL")
@@ -55,7 +70,15 @@ def parse_portfolio(value: str) -> dict[str, float]:
     for position in value.split(","):
         try:
             ticker, weight = position.split(":")
-            portfolio[ticker.strip().upper()] = float(weight)
+        except ValueError as error:
+            raise ValueError(f"Invalid portfolio position '{position}'. Use TICKER:WEIGHT.") from error
+        ticker = ticker.strip().upper()
+        if not ticker:
+            raise ValueError(f"Invalid portfolio position '{position}'. Use TICKER:WEIGHT.")
+        if ticker in portfolio:
+            raise ValueError(f"Duplicate ticker '{ticker}' in portfolio.")
+        try:
+            portfolio[ticker] = float(weight)
         except ValueError as error:
             raise ValueError(f"Invalid portfolio position '{position}'. Use TICKER:WEIGHT.") from error
 
@@ -121,7 +144,6 @@ def simulate_paths(
     rng = np.random.default_rng(seed)
     shocks = rng.standard_normal((horizon, simulations))
     daily_returns = daily_drift + daily_volatility * shocks
-    cumulative_returns = np.exp(np.cumsum(daily_returns, axis=0))
     growth_factors = np.exp(np.cumsum(daily_returns, axis=0))
     starting_row = np.full((1, simulations), spot_price)
     price_paths = spot_price * growth_factors
@@ -147,11 +169,18 @@ def simulate_portfolio_paths(
     latest_prices = prices.iloc[-1].to_numpy()
     shares = portfolio_value * weights / latest_prices
     rng = np.random.default_rng(seed)
-    shocks = rng.multivariate_normal(
-        mean=np.zeros(len(weights)),
-        cov=covariance,
-        size=(horizon, simulations),
-    )
+    try:
+        shocks = rng.multivariate_normal(
+            mean=np.zeros(len(weights)),
+            cov=covariance,
+            size=(horizon, simulations),
+            check_valid="raise",
+        )
+    except (np.linalg.LinAlgError, ValueError) as error:
+        raise ValueError(
+            "Portfolio covariance is singular or invalid. Use distinct tickers "
+            "with enough shared price history."
+        ) from error
     daily_returns = daily_drift + shocks
     asset_growth = np.exp(np.cumsum(daily_returns, axis=0))
     asset_prices = asset_growth * latest_prices
@@ -161,8 +190,14 @@ def simulate_portfolio_paths(
     asset_paths = np.concatenate(
         [starting_asset_prices, asset_prices], axis=0
     )
-    simulated_log_returns = pd.Series(np.log(prices / prices.shift(1)).dot(weights))
+    simulated_log_returns = log_returns.dot(weights)
     return np.vstack([starting_row, portfolio_paths]), asset_paths, simulated_log_returns
+
+
+def _style_figure(figure: plt.Figure, axes: np.ndarray) -> None:
+    figure.patch.set_facecolor("#f7f4ee")
+    for axis in axes.flat:
+        axis.set_facecolor("#f7f4ee")
 
 
 def plot_asset_results(
@@ -170,11 +205,11 @@ def plot_asset_results(
     prices: pd.DataFrame,
     asset_paths: np.ndarray,
     output_path: str,
-) -> None:
+) -> plt.Figure:
     chart_count = len(tickers)
     rows = int(np.ceil(chart_count / 2))
     figure, axes = plt.subplots(rows, 2, figsize=(14, 4.2 * rows), squeeze=False)
-    figure.patch.set_facecolor("#f7f4ee")
+    _style_figure(figure, axes)
     axes_flat = axes.ravel()
     days = np.arange(asset_paths.shape[0])
 
@@ -183,7 +218,6 @@ def plot_asset_results(
         asset_paths_scaled = asset_paths[:, :, index]
         percentiles = np.percentile(asset_paths_scaled, [5, 50, 95], axis=1)
         sample_count = min(100, asset_paths.shape[1])
-        axis.set_facecolor("#f7f4ee")
         axis.plot(days, asset_paths_scaled[:, :sample_count], color="#8aa6a3", alpha=0.10, linewidth=0.7)
         axis.fill_between(days, percentiles[0], percentiles[2], color="#2f6f73", alpha=0.16)
         axis.plot(days, percentiles[1], color="#c85c3d", linewidth=2, label="Median path")
@@ -206,7 +240,7 @@ def plot_asset_results(
     )
     figure.tight_layout(rect=(0, 0, 1, 0.95))
     figure.savefig(output_path, dpi=180, bbox_inches="tight", facecolor=figure.get_facecolor())
-    plt.close(figure)
+    return figure
 
 def build_report(
     ticker: str,
@@ -235,12 +269,47 @@ def build_report(
     )
 
 
+def backtest_portfolio(
+    prices: pd.DataFrame,
+    weights: np.ndarray,
+    window: int,
+    confidence: float,
+) -> BacktestReport:
+    if window < 20:
+        raise ValueError("Backtest window must be at least 20 trading days.")
+    if not 0.5 < confidence < 1:
+        raise ValueError("Backtest confidence must be between 0.5 and 1.")
+
+    log_returns = np.log(prices / prices.shift(1)).dropna()
+    portfolio_returns = log_returns.dot(weights)
+    if len(portfolio_returns) <= window:
+        raise ValueError(
+            f"Backtest needs more than {window} shared trading days of history; "
+            f"only {len(portfolio_returns)} are available."
+        )
+
+    forecast_thresholds = portfolio_returns.rolling(window).quantile(1 - confidence).shift(1)
+    evaluation = pd.DataFrame(
+        {"actual": portfolio_returns, "threshold": forecast_thresholds}
+    ).dropna()
+    breaches = evaluation["actual"] < evaluation["threshold"]
+    breach_returns = evaluation.loc[breaches, "actual"]
+    return BacktestReport(
+        observations=len(evaluation),
+        breaches=int(breaches.sum()),
+        breach_rate=float(breaches.mean()),
+        expected_breach_rate=1 - confidence,
+        average_breach_return=float(breach_returns.mean()) if not breach_returns.empty else 0.0,
+        worst_return=float(evaluation["actual"].min()),
+    )
+
+
 def plot_results(
     ticker: str,
     paths: np.ndarray,
     report: RiskReport,
     output_path: str,
-) -> None:
+) -> plt.Figure:
     days = np.arange(paths.shape[0])
     percentiles = np.percentile(paths, [5, 25, 50, 75, 95], axis=1)
     terminal_prices = paths[-1]
@@ -252,9 +321,7 @@ def plot_results(
         figsize=(14, 6),
         gridspec_kw={"width_ratios": [1.65, 1]},
     )
-    figure.patch.set_facecolor("#f7f4ee")
-    for axis in axes:
-        axis.set_facecolor("#f7f4ee")
+    _style_figure(figure, axes)
 
     sample_count = min(150, paths.shape[1])
     axes[0].plot(days, paths[:, :sample_count], color="#8aa6a3", alpha=0.10, linewidth=0.8)
@@ -284,7 +351,7 @@ def plot_results(
     )
     figure.tight_layout(rect=(0, 0, 1, 0.94))
     figure.savefig(output_path, dpi=180, bbox_inches="tight", facecolor=figure.get_facecolor())
-    plt.close(figure)
+    return figure
 
 
 def print_report(
@@ -295,6 +362,7 @@ def print_report(
     output_path: str,
     portfolio: dict[str, float] | None = None,
     asset_output_path: str | None = None,
+    include_output_paths: bool = True,
 ) -> None:
     print("\nCLASSICAL MONTE CARLO RISK REPORT")
     print("=" * 38)
@@ -315,9 +383,10 @@ def print_report(
     print(f"VaR ({confidence:.0%})            {report.var_95:.2%}")
     print(f"CVaR ({confidence:.0%})           {report.cvar_95:.2%}")
     print(f"Simulated range       {report.worst_case:+.2%} to {report.best_case:+.2%}")
-    print(f"Portfolio chart       {Path(output_path).resolve()}")
-    if asset_output_path:
-        print(f"Asset charts          {Path(asset_output_path).resolve()}")
+    if include_output_paths:
+        print(f"Portfolio chart       {Path(output_path).resolve()}")
+        if asset_output_path:
+            print(f"Asset charts          {Path(asset_output_path).resolve()}")
     print()
 
 
@@ -344,14 +413,16 @@ def main() -> None:
         )
         label = "Portfolio (" + ", ".join(portfolio) + ")"
         asset_output_path = "portfolio_assets_risk.png"
-        plot_asset_results(
+        asset_figure = plot_asset_results(
             list(prices.columns),
             prices,
             asset_paths,
             asset_output_path,
         )
+        plt.close(asset_figure)
     report = build_report(label, paths, log_returns, args.confidence)
-    plot_results(label, paths, report, args.output)
+    portfolio_figure = plot_results(label, paths, report, args.output)
+    plt.close(portfolio_figure)
     print_report(
         report,
         args.horizon,

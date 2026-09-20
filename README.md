@@ -32,7 +32,9 @@ For the streamlined desktop interface, run:
 ./.venv/bin/python portfolio_app.py
 ```
 
-The dashboard lets you edit up to five tickers and their percentage weights, set the starting account value, choose the historical lookback, and set the forecast horizon and number of simulation paths. Click **Run classical Monte Carlo** to download market history, run the same correlated simulation used by the CLI, and display the report. Generated charts are saved locally but are ignored by Git.
+The dashboard lets you edit up to five tickers and their percentage weights, set the starting account value, choose the historical lookback, and set the forecast horizon and number of simulation paths. Click **Run classical Monte Carlo** to download market history, run the same correlated simulation used by the CLI, and display the report and both live Matplotlib charts directly in the app's **Charts** tab. The chart files are also exported to the project folder and can be opened with the chart buttons.
+
+The **Backtesting** tab runs a rolling historical VaR check. It uses the preceding rolling window of weighted portfolio returns to set a historical loss threshold, then counts how often the next observed return breaches that threshold. The output shows the observed breach rate, expected breach rate, number of test observations, average breach return, and worst observed return.
 
 The original command-line interface remains available for reproducible runs and automation:
 
@@ -83,7 +85,7 @@ Weights are decimal portfolio allocations and must add up to `1.0`. For example,
 
 The horizon is measured in trading days: `21` is about one month, `63` is about one quarter, and `252` is about one trading year.
 
-## Backtesting roadmap
+## Backtesting methodology
 
 To backtest the model, use a walk-forward process rather than fitting on the entire history:
 
