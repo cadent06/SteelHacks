@@ -309,6 +309,7 @@ def plot_results(
     paths: np.ndarray,
     report: RiskReport,
     output_path: str,
+    confidence: float,
 ) -> plt.Figure:
     days = np.arange(paths.shape[0])
     percentiles = np.percentile(paths, [5, 25, 50, 75, 95], axis=1)
@@ -335,7 +336,12 @@ def plot_results(
 
     axes[1].hist(terminal_prices, bins=60, color="#2f6f73", alpha=0.88, edgecolor="#f7f4ee")
     axes[1].axvline(report.spot_price, color="#263238", linestyle="--", linewidth=1.5, label="Today")
-    axes[1].axvline(report.spot_price * (1 - report.var_95), color="#c85c3d", linewidth=2, label="95% VaR threshold")
+    axes[1].axvline(
+        report.spot_price * (1 - report.var_95),
+        color="#c85c3d",
+        linewidth=2,
+        label=f"{confidence:.0%} VaR threshold",
+    )
     axes[1].set_title("Terminal price distribution", loc="left", weight="bold")
     axes[1].set_xlabel("Price ($)")
     axes[1].set_ylabel("Simulated outcomes")
@@ -421,7 +427,7 @@ def main() -> None:
         )
         plt.close(asset_figure)
     report = build_report(label, paths, log_returns, args.confidence)
-    portfolio_figure = plot_results(label, paths, report, args.output)
+    portfolio_figure = plot_results(label, paths, report, args.output, args.confidence)
     plt.close(portfolio_figure)
     print_report(
         report,

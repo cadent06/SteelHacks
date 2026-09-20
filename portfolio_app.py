@@ -82,12 +82,14 @@ class RiskDashboard:
         self.horizon_var = tk.StringVar(value="252")
         self.simulations_var = tk.StringVar(value="20000")
         self.lookback_var = tk.StringVar(value="5")
+        self.confidence_var = tk.StringVar(value="95")
         for row, (label, variable, suffix) in enumerate(
             [
                 ("Starting portfolio value", self.value_var, "$"),
                 ("Forecast horizon", self.horizon_var, "trading days"),
                 ("Simulation paths", self.simulations_var, "paths"),
                 ("Historical lookback", self.lookback_var, "years"),
+                ("Risk confidence", self.confidence_var, "%"),
             ]
         ):
             ttk.Label(settings, text=label).grid(row=row, column=0, sticky="w", pady=5)
@@ -250,14 +252,18 @@ class RiskDashboard:
 
     def portfolio_string(self) -> str:
         entries: list[str] = []
-        for ticker_var, weight_var in self.fields:
+        for row, (ticker_var, weight_var) in enumerate(self.fields, start=1):
             ticker = ticker_var.get().strip().upper()
             weight = weight_var.get().strip()
             if not ticker and not weight:
                 continue
             if not ticker or not weight:
-                raise ValueError("Each active row needs both a ticker and a weight.")
-            entries.append(f"{ticker}:{float(weight) / 100}")
+                raise ValueError(f"Holding row {row} needs both a ticker and a weight.")
+            try:
+                numeric_weight = float(weight)
+            except ValueError as error:
+                raise ValueError(f"Weight for holding row {row} must be a number; received '{weight}'.") from error
+            entries.append(f"{ticker}:{numeric_weight / 100}")
         if not entries:
             raise ValueError("Add at least one holding.")
         return ",".join(entries)
@@ -269,8 +275,11 @@ class RiskDashboard:
             horizon = int(self.horizon_var.get())
             simulations = int(self.simulations_var.get())
             lookback = int(self.lookback_var.get())
+            confidence = float(self.confidence_var.get()) / 100
             if portfolio_value <= 0 or horizon < 1 or simulations < 1 or lookback < 1:
                 raise ValueError("Simulation settings must be positive.")
+            if not 0.5 < confidence < 1:
+                raise ValueError("Risk confidence must be between 50 and 100 percent.")
         except (ValueError, TypeError) as error:
             messagebox.showerror("Check your inputs", str(error))
             return
@@ -279,7 +288,7 @@ class RiskDashboard:
         self.status.set("Downloading history and running simulation...")
         threading.Thread(
             target=self._run_worker,
-            args=(portfolio, portfolio_value, horizon, simulations, lookback),
+            args=(portfolio, portfolio_value, horizon, simulations, lookback, confidence),
             daemon=True,
         ).start()
 
@@ -350,7 +359,15 @@ class RiskDashboard:
         self.status.set("Backtest failed.")
         messagebox.showerror("Backtest error", error)
 
-    def _run_worker(self, portfolio: dict[str, float], portfolio_value: float, horizon: int, simulations: int, lookback: int) -> None:
+    def _run_worker(
+        self,
+        portfolio: dict[str, float],
+        portfolio_value: float,
+        horizon: int,
+        simulations: int,
+        lookback: int,
+        confidence: float,
+    ) -> None:
         try:
             prices = model.download_portfolio_prices(list(portfolio), lookback)
             weights = np.array([portfolio[ticker] for ticker in prices.columns])
@@ -358,7 +375,7 @@ class RiskDashboard:
                 prices, weights, portfolio_value, horizon, simulations, seed=42
             )
             label = "Portfolio (" + ", ".join(portfolio) + ")"
-            report = model.build_report(label, paths, log_returns, 0.95)
+            report = model.build_report(label, paths, log_returns, confidence)
             self.root.after(
                 0,
                 self._show_success,
@@ -370,6 +387,7 @@ class RiskDashboard:
                 portfolio,
                 horizon,
                 simulations,
+                confidence,
             )
         except Exception as error:  # Keep network/data errors visible in the dashboard.
             self.root.after(0, self._show_error, str(error))
@@ -384,10 +402,11 @@ class RiskDashboard:
         portfolio: dict[str, float],
         horizon: int,
         simulations: int,
+        confidence: float,
     ) -> None:
         output = str(Path(model.__file__).with_name("monte_carlo_risk.png"))
         asset_output = str(Path(model.__file__).with_name("portfolio_assets_risk.png"))
-        portfolio_figure = model.plot_results(label, paths, report, output)
+        portfolio_figure = model.plot_results(label, paths, report, output, confidence)
         asset_figure = model.plot_asset_results(list(prices.columns), prices, asset_paths, asset_output)
         buffer = io.StringIO()
         with redirect_stdout(buffer):
@@ -395,7 +414,7 @@ class RiskDashboard:
                 report,
                 horizon,
                 simulations,
-                0.95,
+                confidence,
                 output,
                 portfolio,
                 asset_output,
