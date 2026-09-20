@@ -24,6 +24,22 @@ A Python-based market-risk simulator that uses historical Yahoo Finance data and
 - Conditional Value at Risk (CVaR)
 - Confidence-band visualizations
 
+## Run the project
+
+For the streamlined desktop interface, run:
+
+```bash
+./.venv/bin/python portfolio_app.py
+```
+
+The dashboard lets you edit up to five tickers and their percentage weights, set the starting account value, choose the historical lookback, and set the forecast horizon and number of simulation paths. Click **Run classical Monte Carlo** to download market history, run the same correlated simulation used by the CLI, and display the report. Generated charts are saved locally but are ignored by Git.
+
+The original command-line interface remains available for reproducible runs and automation:
+
+```bash
+./.venv/bin/python monteCarloRisk.py
+```
+
 By default, the script runs the five-stock example portfolio: SPY, AAPL, MSFT, GOOGL, and AMZN. Run it with:
 
 ```bash
