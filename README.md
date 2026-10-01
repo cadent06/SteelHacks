@@ -36,6 +36,16 @@ The dashboard lets you edit up to five tickers and their percentage weights, set
 
 The **Backtesting** tab has its own confidence setting and runs a rolling historical VaR check. It uses the preceding rolling window of weighted portfolio returns to set a historical loss threshold, then counts how often the next observed return breaches that threshold. The output shows the observed breach rate, expected breach rate, number of test observations, average breach return, and worst observed return.
 
+The **Market intelligence** tab is Product 2. It runs market-wide analysis over a curated S&P 500 + Nasdaq universe and includes:
+
+- Asynchronous discrepancy-agent scans for stale data, missing observations, inconsistent metrics, and failed fundamental coverage.
+- Regime and market-health views.
+- Sector/symbol momentum heat maps.
+- Volatility and liquidity concentration snapshots.
+- Trend and breadth dashboards.
+- Long/short entry-exit candidates that combine macro risk context (VaR/CVaR), heat-map state, and fundamental overlays.
+- Validation monitoring with data quality checks, signal sanity checks, and a forward-check summary.
+
 The original command-line interface remains available for reproducible runs and automation:
 
 ```bash

@@ -19,6 +19,7 @@ matplotlib.use("Agg")
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib import pyplot as plt
 
+import market_intelligence as intelligence
 import monteCarloRisk as model
 
 
@@ -33,6 +34,11 @@ class RiskDashboard:
         self.chart_canvases: list[FigureCanvasTkAgg] = []
         self.chart_paths: dict[str, str] = {}
         self.status = tk.StringVar(value="Ready. Configure your portfolio and run a simulation.")
+        self.market_data_layer = intelligence.MarketDataLayer()
+        self.discrepancy_agent = intelligence.DiscrepancyAgent()
+        self.market_visualizer = intelligence.MarketVisualizer()
+        self.market_signal_engine = intelligence.RiskSignalEngine()
+        self.market_validator = intelligence.Product2Validator()
         self.build_interface()
 
     def build_interface(self) -> None:
@@ -213,6 +219,53 @@ class RiskDashboard:
         self.backtest_output.insert("1.0", "Backtest results will appear here.\n")
         self.backtest_output.configure(state="disabled")
 
+        market_tab = ttk.Frame(self.results_tabs, padding=18)
+        self.results_tabs.add(market_tab, text="Market intelligence")
+        market_tab.columnconfigure(1, weight=1)
+        ttk.Label(
+            market_tab,
+            text="Product 2: S&P + Nasdaq market intelligence",
+            style="Section.TLabel",
+        ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 4))
+        ttk.Label(
+            market_tab,
+            text="Asynchronous discrepancy scans, heat maps, risk context, and long/short entry-exit candidates.",
+            style="Subtitle.TLabel",
+        ).grid(row=1, column=0, columnspan=4, sticky="w", pady=(0, 14))
+        self.market_lookback_var = tk.StringVar(value="3")
+        self.market_confidence_var = tk.StringVar(value="95")
+        ttk.Label(market_tab, text="Lookback").grid(row=2, column=0, sticky="w", pady=4)
+        ttk.Entry(market_tab, textvariable=self.market_lookback_var, width=12).grid(row=2, column=1, sticky="w", padx=(10, 12))
+        ttk.Label(market_tab, text="years", style="Subtitle.TLabel").grid(row=2, column=2, sticky="w")
+        ttk.Label(market_tab, text="Risk confidence").grid(row=3, column=0, sticky="w", pady=4)
+        ttk.Entry(market_tab, textvariable=self.market_confidence_var, width=12).grid(row=3, column=1, sticky="w", padx=(10, 12))
+        ttk.Label(market_tab, text="%", style="Subtitle.TLabel").grid(row=3, column=2, sticky="w")
+        self.market_run_button = ttk.Button(
+            market_tab,
+            text="Run market intelligence",
+            style="Accent.TButton",
+            command=self.run_market_intelligence,
+        )
+        self.market_run_button.grid(row=4, column=0, columnspan=4, sticky="w", pady=(10, 12))
+        self.market_output = tk.Text(
+            market_tab,
+            height=22,
+            wrap="word",
+            bg="#263238",
+            fg="#f7f4ee",
+            relief="flat",
+            padx=14,
+            pady=12,
+            font=("Menlo", 10),
+        )
+        market_scroll = ttk.Scrollbar(market_tab, orient="vertical", command=self.market_output.yview)
+        self.market_output.configure(yscrollcommand=market_scroll.set)
+        self.market_output.grid(row=5, column=0, columnspan=3, sticky="nsew")
+        market_scroll.grid(row=5, column=3, sticky="ns")
+        market_tab.rowconfigure(5, weight=1)
+        self.market_output.insert("1.0", "Market intelligence output will appear here.\n")
+        self.market_output.configure(state="disabled")
+
     def _update_chart_scrollregion(self, _event: tk.Event) -> None:
         self.chart_canvas.configure(scrollregion=self.chart_canvas.bbox("all"))
 
@@ -313,6 +366,150 @@ class RiskDashboard:
             args=(portfolio, window, confidence, lookback),
             daemon=True,
         ).start()
+
+    def run_market_intelligence(self) -> None:
+        try:
+            lookback = int(self.market_lookback_var.get())
+            confidence = float(self.market_confidence_var.get()) / 100
+            if lookback < 1:
+                raise ValueError("Market intelligence lookback must be at least 1 year.")
+            if not 0.5 < confidence < 1:
+                raise ValueError("Market confidence must be between 50 and 100 percent.")
+        except (ValueError, TypeError) as error:
+            messagebox.showerror("Check market intelligence inputs", str(error))
+            return
+
+        self.market_run_button.configure(state="disabled")
+        self.status.set("Loading market-wide data for Product 2...")
+        self.market_output.configure(state="normal")
+        self.market_output.delete("1.0", "end")
+        self.market_output.insert("1.0", "Running Product 2 analysis...\n")
+        self.market_output.configure(state="disabled")
+        threading.Thread(
+            target=self._market_worker,
+            args=(lookback, confidence),
+            daemon=True,
+        ).start()
+
+    def _market_worker(self, lookback: int, confidence: float) -> None:
+        try:
+            dataset = self.market_data_layer.fetch_market_dataset(lookback)
+            self.market_signal_engine = intelligence.RiskSignalEngine(confidence=confidence)
+            self.discrepancy_agent.start(dataset, on_complete=lambda: self.root.after(0, self._publish_discrepancy_results))
+            regime = self.market_visualizer.build_regime_health(dataset)
+            heat = self.market_visualizer.build_heat_map(dataset)
+            vol_liq = self.market_visualizer.build_volatility_liquidity(dataset)
+            trend = self.market_visualizer.build_trend_breadth(dataset)
+            macro_risk = self.market_signal_engine.build_macro_risk_context(dataset)
+            signals = self.market_signal_engine.generate_signals(dataset, heat, trend, macro_risk)
+            quality = self.market_validator.run_data_quality_checks(dataset)
+            sanity = self.market_validator.run_signal_sanity_checks(signals)
+            forward = self.market_validator.run_forward_check(dataset, horizon_days=5)
+            payload = self._format_market_intelligence_output(
+                regime=regime,
+                heat=heat,
+                vol_liq=vol_liq,
+                trend=trend,
+                signals=signals,
+                quality=quality,
+                sanity=sanity,
+                forward=forward,
+                macro_risk=macro_risk,
+            )
+            self.root.after(0, self._show_market_intelligence_success, payload)
+        except Exception as error:  # Keep network/data errors visible in the dashboard.
+            self.root.after(0, self._show_market_intelligence_error, str(error))
+
+    def _format_market_intelligence_output(
+        self,
+        regime: pd.DataFrame,
+        heat: pd.DataFrame,
+        vol_liq: pd.DataFrame,
+        trend: pd.DataFrame,
+        signals: list[intelligence.SignalCandidate],
+        quality: dict[str, float],
+        sanity: dict[str, float],
+        forward: dict[str, float],
+        macro_risk: dict[str, model.RiskReport],
+    ) -> str:
+        lines = [
+            "PRODUCT 2 | MARKET INTELLIGENCE",
+            "==============================",
+            "Coverage: S&P 500 core + Nasdaq core universe",
+            "",
+            "MARKET REGIME / HEALTH (top momentum names)",
+            regime.head(6).to_string(float_format=lambda x: f"{x:,.4f}"),
+            "",
+            "SECTOR + SYMBOL HEAT MAP (top/bottom 5 by 21D momentum)",
+            pd.concat([heat.head(5), heat.tail(5)]).to_string(float_format=lambda x: f"{x:,.4f}"),
+            "",
+            "VOLATILITY / LIQUIDITY CONCENTRATION (top 6 liquidity share)",
+            vol_liq.head(6).to_string(float_format=lambda x: f"{x:,.4f}"),
+            "",
+            "TREND + BREADTH SNAPSHOT (top 6 trend score)",
+            trend.head(6).to_string(float_format=lambda x: f"{x:,.4f}"),
+            "",
+            "MACRO RISK CONTEXT",
+        ]
+        if macro_risk:
+            for symbol, report in macro_risk.items():
+                lines.append(
+                    f"- {symbol}: VaR {report.var_95:.2%}, CVaR {report.cvar_95:.2%}, "
+                    f"loss probability {report.probability_of_loss:.2%}, annualized vol {report.volatility:.2%}"
+                )
+        else:
+            lines.append("- Unavailable (insufficient market data for SPY/QQQ risk context)")
+        lines.extend(["", "LONG/SHORT ENTRY-EXIT CANDIDATES"])
+        for candidate in signals[:8]:
+            lines.extend(
+                [
+                    f"- {candidate.symbol} | {candidate.side} | confidence {candidate.confidence:.0%}",
+                    f"  Entry {candidate.entry_price:,.2f} | Stop {candidate.stop_price:,.2f} | Target {candidate.target_price:,.2f}",
+                    f"  Thesis: {candidate.thesis}",
+                    f"  Risk context: {candidate.risk_context}",
+                    f"  Rationale: {'; '.join(candidate.rationale)}",
+                ]
+            )
+        lines.extend(
+            [
+                "",
+                "VALIDATION + MONITORING",
+                f"- Data quality: {quality}",
+                f"- Signal sanity: {sanity}",
+                f"- Forward-check (5-day): {forward}",
+                "",
+                "Discrepancy scan runs asynchronously and will append findings when complete.",
+            ]
+        )
+        return "\n".join(lines)
+
+    def _show_market_intelligence_success(self, payload: str) -> None:
+        self.market_output.configure(state="normal")
+        self.market_output.delete("1.0", "end")
+        self.market_output.insert("1.0", payload)
+        self.market_output.configure(state="disabled")
+        self.market_run_button.configure(state="normal")
+        self.status.set("Market intelligence complete. Waiting for discrepancy scan results...")
+        self.results_tabs.select(3)
+
+    def _publish_discrepancy_results(self) -> None:
+        findings = self.discrepancy_agent.snapshot()
+        section = ["", "ASYNC DISCREPANCY AGENT FINDINGS", "-------------------------------"]
+        if not findings:
+            section.append("No high-confidence discrepancies detected.")
+        else:
+            for finding in findings:
+                symbol = f"[{finding.symbol}] " if finding.symbol else ""
+                section.append(f"- {finding.severity.upper()} {finding.category}: {symbol}{finding.message}")
+        self.market_output.configure(state="normal")
+        self.market_output.insert("end", "\n".join(section) + "\n")
+        self.market_output.configure(state="disabled")
+        self.status.set("Market intelligence and discrepancy scan complete.")
+
+    def _show_market_intelligence_error(self, error: str) -> None:
+        self.market_run_button.configure(state="normal")
+        self.status.set("Market intelligence failed.")
+        messagebox.showerror("Market intelligence error", error)
 
     def _backtest_worker(
         self,
@@ -446,6 +643,10 @@ class RiskDashboard:
         self.backtest_output.delete("1.0", "end")
         self.backtest_output.insert("1.0", "Backtest results will appear here.\n")
         self.backtest_output.configure(state="disabled")
+        self.market_output.configure(state="normal")
+        self.market_output.delete("1.0", "end")
+        self.market_output.insert("1.0", "Market intelligence output will appear here.\n")
+        self.market_output.configure(state="disabled")
         self.status.set("Ready. Configure your portfolio and run a simulation.")
 
 
